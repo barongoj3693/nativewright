@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# Test / runtime artifacts
+artifacts/
+test/artifacts/
+coverage/
+.nyc_output/
+
+# Persistent browser profile if someone points NATIVEWRIGHT_USER_DATA_DIR here
+profile/
+.nativewright-profile/
+
+# Logs
+*.log
+logs/
+
+# OS / editor crap
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Secrets — defense in depth; none should exist here, but just in case
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets.json
+
+# Local-only notes
+TODO.local.md
+NOTES.local.md

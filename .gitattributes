@@ -1,0 +1,21 @@
+# Normalise line endings in the repo to LF; Git converts to native on checkout
+# when core.autocrlf is enabled on the client.
+* text=auto eol=lf
+
+# Shell scripts must stay LF even on Windows checkouts
+*.sh    text eol=lf
+*.bash  text eol=lf
+
+# Windows scripts stay CRLF
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# Binaries
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.webp   binary
+*.ico    binary
+*.pdf    binary

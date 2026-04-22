@@ -1,0 +1,286 @@
+'use strict';
+
+/**
+ * Path, lockfile, logging and Chrome-detection helpers for the
+ * NativeWright browser daemon.
+ *
+ * Cross-platform:
+ *   Windows   — %LOCALAPPDATA%\NativeWright\
+ *   macOS     — ~/Library/Application Support/NativeWright/
+ *   Linux/BSD — ${XDG_DATA_HOME:-~/.local/share}/nativewright/
+ *
+ * All public helpers are environment-variable-driven, so tests and
+ * advanced users can redirect every path without touching the code.
+ *
+ * @module config
+ */
+
+const fs = require('fs');
+const fsp = require('fs/promises');
+const path = require('path');
+const os = require('os');
+const http = require('http');
+
+// ---------- platform-aware root directory ---------------------------------
+
+/**
+ * Resolve the per-user data root used by NativeWright.
+ *
+ * Precedence:
+ *   1. $NATIVEWRIGHT_HOME (explicit override)
+ *   2. platform default (see module comment)
+ *
+ * @returns {string} absolute directory path
+ */
+function nativewrightHome() {
+  if (process.env.NATIVEWRIGHT_HOME) return process.env.NATIVEWRIGHT_HOME;
+  const home = os.homedir();
+  if (process.platform === 'win32') {
+    const local = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+    return path.join(local, 'NativeWright');
+  }
+  if (process.platform === 'darwin') {
+    return path.join(home, 'Library', 'Application Support', 'NativeWright');
+  }
+  // linux, freebsd, etc.
+  const xdg = process.env.XDG_DATA_HOME || path.join(home, '.local', 'share');
+  return path.join(xdg, 'nativewright');
+}
+
+const ROOT_DIR        = nativewrightHome();
+const LOCK_FILE       = path.join(ROOT_DIR, 'daemon.json');
+const INSTALL_FILE    = path.join(ROOT_DIR, 'install.json');
+const LOG_DIR         = path.join(ROOT_DIR, 'logs');
+const LOG_FILE        = path.join(LOG_DIR, 'daemon.log');
+const DEFAULT_PROFILE = path.join(ROOT_DIR, 'profile', 'default');
+
+/**
+ * Persistent browser profile directory (overridable via env).
+ * @returns {string}
+ */
+function userDataDir() {
+  return process.env.NATIVEWRIGHT_USER_DATA_DIR || DEFAULT_PROFILE;
+}
+
+/**
+ * Directory for screenshot / HTML / metadata artifacts.
+ * Defaults to `./artifacts` under the current working directory so
+ * evidence lands next to the project being inspected.
+ * @returns {string}
+ */
+function artifactsDir() {
+  if (process.env.NATIVEWRIGHT_ARTIFACTS_DIR) return process.env.NATIVEWRIGHT_ARTIFACTS_DIR;
+  return path.join(process.cwd(), 'artifacts');
+}
+
+/**
+ * Create the directory (recursive); no-op if it already exists.
+ * @param {string} dir
+ * @returns {void}
+ */
+function ensureDir(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+}
+
+// ---------- Chrome / Chromium discovery -----------------------------------
+
+/**
+ * Cross-platform Chrome / Chromium executable probe.
+ *
+ * Precedence:
+ *   1. $NATIVEWRIGHT_CHROME_PATH (explicit override)
+ *   2. First existing path from a platform-specific candidate list.
+ *   3. `null` — caller should let Patchright handle discovery via `channel`.
+ *
+ * @returns {string|null}
+ */
+function chromeExecutable() {
+  if (process.env.NATIVEWRIGHT_CHROME_PATH) return process.env.NATIVEWRIGHT_CHROME_PATH;
+
+  const home = os.homedir();
+  let candidates;
+
+  if (process.platform === 'win32') {
+    const local = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+    candidates = [
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+      path.join(local, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      'C:\\Program Files\\Google\\Chrome Beta\\Application\\chrome.exe',
+      'C:\\Program Files\\Google\\Chrome Dev\\Application\\chrome.exe',
+    ];
+  } else if (process.platform === 'darwin') {
+    candidates = [
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      '/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta',
+      '/Applications/Google Chrome Dev.app/Contents/MacOS/Google Chrome Dev',
+      '/Applications/Chromium.app/Contents/MacOS/Chromium',
+      path.join(home, 'Applications', 'Google Chrome.app', 'Contents', 'MacOS', 'Google Chrome'),
+    ];
+  } else {
+    // linux / freebsd
+    candidates = [
+      '/usr/bin/google-chrome',
+      '/usr/bin/google-chrome-stable',
+      '/usr/bin/google-chrome-beta',
+      '/usr/bin/google-chrome-unstable',
+      '/opt/google/chrome/chrome',
+      '/opt/google/chrome/google-chrome',
+      '/snap/bin/chromium',
+      '/usr/bin/chromium',
+      '/usr/bin/chromium-browser',
+    ];
+  }
+
+  for (const p of candidates) {
+    try { if (fs.existsSync(p)) return p; } catch { /* ignore */ }
+  }
+  return null;
+}
+
+// ---------- lockfile / install.json IO ------------------------------------
+
+/**
+ * @typedef {Object} Lockfile
+ * @property {number} pid
+ * @property {number} port
+ * @property {string} userDataDir
+ * @property {string} startedAt  ISO 8601 timestamp
+ * @property {string} scriptPath absolute path to browser.js
+ * @property {string} [node]     `process.version` of the daemon process
+ */
+
+/**
+ * Read the current daemon lockfile, or `null` if missing.
+ * @returns {Promise<Lockfile|null>}
+ */
+async function readLockfile() {
+  try {
+    const raw = await fsp.readFile(LOCK_FILE, 'utf8');
+    return JSON.parse(raw);
+  } catch (e) {
+    if (e.code === 'ENOENT') return null;
+    throw e;
+  }
+}
+
+/**
+ * Write the daemon lockfile atomically.
+ * @param {Lockfile} obj
+ * @returns {Promise<void>}
+ */
+async function writeLockfile(obj) {
+  ensureDir(ROOT_DIR);
+  await fsp.writeFile(LOCK_FILE, JSON.stringify(obj, null, 2));
+}
+
+/**
+ * Remove the lockfile; silent if absent.
+ * @returns {Promise<void>}
+ */
+async function deleteLockfile() {
+  try { await fsp.unlink(LOCK_FILE); } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+  }
+}
+
+/**
+ * Persist the daemon's absolute script path so downstream tools
+ * (Claude Code skills, etc.) can locate the entry point portably.
+ * @param {string} scriptPath
+ * @returns {Promise<void>}
+ */
+async function writeInstallFile(scriptPath) {
+  ensureDir(ROOT_DIR);
+  const obj = {
+    scriptPath,
+    installedAt: new Date().toISOString(),
+    node: process.version,
+    platform: process.platform,
+  };
+  await fsp.writeFile(INSTALL_FILE, JSON.stringify(obj, null, 2));
+}
+
+// ---------- liveness check ------------------------------------------------
+
+/**
+ * Check whether a PID is still alive without sending a real signal.
+ * Cross-platform: POSIX uses `kill(pid, 0)`, Windows uses the same
+ * Node wrapper which returns EPERM for existing processes we can't signal.
+ *
+ * @param {number} pid
+ * @returns {boolean}
+ */
+function pidAlive(pid) {
+  if (!pid || typeof pid !== 'number') return false;
+  try { process.kill(pid, 0); return true; }
+  catch (e) { return e.code === 'EPERM'; }
+}
+
+/**
+ * Issue a short `GET /ping` to the loopback port and return whether
+ * a 200 response came back within `timeoutMs`.
+ * @param {number} port
+ * @param {number} [timeoutMs=500]
+ * @returns {Promise<boolean>}
+ */
+function httpPing(port, timeoutMs = 500) {
+  return new Promise((resolve) => {
+    const req = http.request({
+      host: '127.0.0.1', port, path: '/ping', method: 'GET', timeout: timeoutMs,
+    }, (res) => {
+      res.resume();
+      resolve(res.statusCode === 200);
+    });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.end();
+  });
+}
+
+/**
+ * Return true only when the lockfile's PID is still alive AND the
+ * recorded HTTP port accepts a ping. Both checks guard against stale
+ * lockfiles left behind by crashes.
+ * @param {Lockfile|null} lock
+ * @returns {Promise<boolean>}
+ */
+async function verifyLockfile(lock) {
+  if (!lock) return false;
+  if (!pidAlive(lock.pid)) return false;
+  if (!lock.port) return false;
+  return httpPing(lock.port);
+}
+
+// ---------- misc ----------------------------------------------------------
+
+/**
+ * Build a filesystem-safe artifact name from a user-supplied label.
+ * @param {string} [name]
+ * @returns {string}
+ */
+function makeArtifactName(name) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const safe  = (name || 'shot').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
+  return `${stamp}-${safe}`;
+}
+
+/**
+ * Append a single line to the daemon log. Never throws.
+ * @param {string} line
+ * @returns {void}
+ */
+function appendLog(line) {
+  try {
+    ensureDir(LOG_DIR);
+    fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} ${line}\n`);
+  } catch { /* logging must never throw */ }
+}
+
+module.exports = {
+  ROOT_DIR, LOCK_FILE, INSTALL_FILE, LOG_DIR, LOG_FILE, DEFAULT_PROFILE,
+  nativewrightHome, userDataDir, artifactsDir, chromeExecutable, ensureDir,
+  readLockfile, writeLockfile, deleteLockfile, writeInstallFile,
+  pidAlive, httpPing, verifyLockfile,
+  makeArtifactName, appendLog,
+};
